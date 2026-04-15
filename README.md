@@ -4,7 +4,8 @@ A cross-platform **floating desktop window** that displays Claude Code context s
 
 > **悬浮、可配、不绑定 IDE** — 无需修改 Claude Code，直接读取文件系统数据。
 
-![Claude HUD Floating Bar](docs/screenshots/hud-expanded.png)
+<img width="395" height="556" alt="image" src="https://github.com/user-attachments/assets/7a0c87cd-93c0-49b0-906b-0ba49c99dac4" />
+
 
 ## Features
 
