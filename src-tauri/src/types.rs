@@ -42,6 +42,7 @@ pub enum ToolStatus {
 
 /// Parsed from a single line of transcript JSONL
 #[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct TranscriptEntry {
     #[serde(rename = "type")]
     pub entry_type: Option<String>,
@@ -57,6 +58,7 @@ pub struct TranscriptEntry {
 #[derive(Debug, Deserialize)]
 pub struct MessageData {
     pub role: Option<String>,
+    pub model: Option<String>,
     pub usage: Option<UsageData>,
     pub content: Option<serde_json::Value>,
 }

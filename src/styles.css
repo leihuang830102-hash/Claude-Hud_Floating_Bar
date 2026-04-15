@@ -65,7 +65,7 @@ body {
   border: 1px solid #2a2a4a;
   border-radius: 8px;
   width: 100%;
-  max-width: 472px; /* 480px window - 8px padding */
+  max-width: 312px; /* 320px window - 8px padding */
   box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
   overflow: hidden;
 }
@@ -79,33 +79,30 @@ body {
   cursor: grab;
   background: #16162a;
   border-bottom: 1px solid #2a2a4a;
+  justify-content: space-between;
 }
 
 .hud-titlebar:active {
   cursor: grabbing;
 }
 
-/* Model badge — green pill next to the title */
+/* Model badge — green pill, the primary identity in title bar */
 .model-badge {
   background: #4ecca3;
   color: #1a1a2e;
-  padding: 1px 6px;
+  padding: 2px 8px;
   border-radius: 4px;
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 700;
   white-space: nowrap;
   letter-spacing: 0.3px;
 }
 
-/* Project name text */
-.project-name {
-  flex: 1;
-  font-weight: 600;
-  font-size: 12px;
-  color: #e0e0e0;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+/* Button group on the right side of title bar */
+.titlebar-buttons {
+  display: flex;
+  align-items: center;
+  gap: 2px;
 }
 
 /* Window control buttons (collapse / settings / close) */
@@ -328,6 +325,22 @@ body {
   text-transform: uppercase;
   letter-spacing: 0.5px;
   margin-bottom: 6px;
+}
+
+.settings-section-title {
+  font-size: 10px;
+  font-weight: 600;
+  color: #666;
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+  margin-top: 6px;
+  margin-bottom: 3px;
+  padding-bottom: 2px;
+  border-bottom: 1px solid #2a2a4a;
+}
+
+.settings-section-title:first-child {
+  margin-top: 0;
 }
 
 .settings-row {

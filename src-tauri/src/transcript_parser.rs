@@ -96,10 +96,12 @@ pub fn parse_transcript(path: &Path) -> Option<SessionState> {
                         }
                     }
 
-                    // Extract model from assistant message content if present.
-                    // Claude Code embeds the model identifier in the message metadata.
+                    // Extract model: prefer the direct `message.model` field,
+                    // fallback to searching inside content blocks.
                     if model.is_empty() {
-                        if let Some(content) = &msg.content {
+                        if let Some(m) = &msg.model {
+                            model = m.clone();
+                        } else if let Some(content) = &msg.content {
                             extract_model_from_content(content, &mut model);
                         }
                     }
@@ -108,20 +110,31 @@ pub fn parse_transcript(path: &Path) -> Option<SessionState> {
         }
 
         // --- Tool usage tracking ---
-        if let Some(ref tool_name_val) = entry.tool_name {
-            // Deduplicate: only add if not already tracked
-            let tool_name_owned = tool_name_val.clone();
-            if !tools.iter().any(|t| t.name == tool_name_owned) {
-                let status = determine_tool_status(&entry);
-                let detail = extract_tool_detail(&entry);
-                tools.push(ToolInfo {
-                    name: tool_name_owned,
-                    status,
-                    detail,
-                });
-                // Cap the list to avoid unbounded growth
-                if tools.len() > MAX_TOOLS {
-                    tools.remove(0);
+        // Tools are embedded in message.content[] as blocks with type "tool_use".
+        // Each block has: { "type": "tool_use", "id": "...", "name": "Read", "input": {...} }
+        if let Some(msg) = &entry.message {
+            if let Some(content) = &msg.content {
+                if let Some(arr) = content.as_array() {
+                    for block in arr {
+                        if block.get("type").and_then(|v| v.as_str()) == Some("tool_use") {
+                            if let Some(name) = block.get("name").and_then(|v| v.as_str()) {
+                                // Deduplicate: only add if not already tracked
+                                if !tools.iter().any(|t| t.name == name) {
+                                    let detail = extract_tool_detail_from_input(
+                                        block.get("input"),
+                                    );
+                                    tools.push(ToolInfo {
+                                        name: name.to_string(),
+                                        status: ToolStatus::Completed,
+                                        detail,
+                                    });
+                                    if tools.len() > MAX_TOOLS {
+                                        tools.remove(0);
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -249,42 +262,18 @@ fn extract_model_from_content(content: &serde_json::Value, model: &mut String) {
     }
 }
 
-/// Determines tool status from a transcript entry.
+/// Extracts a short detail string from a tool_use block's input field.
 ///
-/// In Claude Code JSONL:
-/// - A tool entry with `tool_input` but no corresponding result yet = Running
-/// - The entry type or presence of error fields can indicate Failed
-/// - Default assumption for past tool entries = Completed
-fn determine_tool_status(entry: &TranscriptEntry) -> ToolStatus {
-    // If the entry type suggests it's a tool result with an error, mark as Failed
-    if let Some(entry_type) = &entry.entry_type {
-        if entry_type == "tool_error" || entry_type == "error" {
-            return ToolStatus::Failed;
-        }
-    }
-
-    // If there's tool_input present, it might be in-progress
-    // For a tail-read parser we can't easily distinguish running vs completed,
-    // so we default to Completed for entries that have tool_name.
-    // The HUD layer can override this with real-time status if needed.
-    ToolStatus::Completed
-}
-
-/// Extracts a detail string from a tool entry for display purposes.
-///
-/// For file operations this would be the filename, for searches the query, etc.
-fn extract_tool_detail(entry: &TranscriptEntry) -> Option<String> {
-    if let Some(input) = &entry.tool_input {
-        // Try common tool input fields: "file_path", "command", "query", "pattern"
-        for key in &["file_path", "command", "query", "pattern", "path"] {
-            if let Some(val) = input.get(*key).and_then(|v| v.as_str()) {
-                let detail = val.to_string();
-                // Truncate very long details for display
-                if detail.len() > 120 {
-                    return Some(format!("{}...", &detail[..117]));
-                }
-                return Some(detail);
+/// For file operations this returns the filename, for Bash the command, etc.
+fn extract_tool_detail_from_input(input: Option<&serde_json::Value>) -> Option<String> {
+    let input = input?;
+    for key in &["file_path", "command", "query", "pattern", "path"] {
+        if let Some(val) = input.get(*key).and_then(|v| v.as_str()) {
+            let detail = val.to_string();
+            if detail.len() > 60 {
+                return Some(format!("{}...", &detail[..57]));
             }
+            return Some(detail);
         }
     }
     None
@@ -349,7 +338,7 @@ mod tests {
     #[test]
     fn test_parse_git_branch() {
         let lines = vec![
-            r#"{"type":"summary","git_branch":"feat/add-transcript-parser","cwd":"d:/Users/test/project","session_id":"sess-001"}"#,
+            r#"{"type":"summary","gitBranch":"feat/add-transcript-parser","cwd":"d:/Users/test/project","sessionId":"sess-001"}"#,
             r#"{"type":"assistant","message":{"role":"assistant","usage":{"input_tokens":500,"cache_read_input_tokens":0,"output_tokens":100},"content":"ok"}}"#,
         ];
         let f = make_temp_jsonl(&lines);
@@ -366,11 +355,12 @@ mod tests {
 
     #[test]
     fn test_parse_tools() {
+        // Real format: tools are inside message.content[] as tool_use blocks
         let lines = vec![
-            r#"{"type":"tool","tool_name":"Read","tool_input":{"file_path":"src/main.rs"}}"#,
-            r#"{"type":"tool","tool_name":"Bash","tool_input":{"command":"cargo test"}}"#,
-            r#"{"type":"tool","tool_name":"Grep","tool_input":{"pattern":"TODO","path":"src"}}"#,
-            r#"{"type":"assistant","message":{"role":"assistant","usage":{"input_tokens":1000,"cache_read_input_tokens":5000,"output_tokens":200},"content":"done"}}"#,
+            r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"call_1","name":"Read","input":{"file_path":"src/main.rs"}}]}}"#,
+            r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"call_2","name":"Bash","input":{"command":"cargo test"}}]}}"#,
+            r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"call_3","name":"Grep","input":{"pattern":"TODO","path":"src"}}]}}"#,
+            r#"{"type":"assistant","message":{"role":"assistant","usage":{"input_tokens":1000,"cache_read_input_tokens":5000,"output_tokens":200},"content":[{"type":"text","text":"done"}]}}"#,
         ];
         let f = make_temp_jsonl(&lines);
 
@@ -411,9 +401,9 @@ mod tests {
     fn test_parse_tool_deduplication() {
         // Same tool appearing multiple times should be deduplicated
         let lines = vec![
-            r#"{"type":"tool","tool_name":"Read","tool_input":{"file_path":"a.rs"}}"#,
-            r#"{"type":"tool","tool_name":"Read","tool_input":{"file_path":"b.rs"}}"#,
-            r#"{"type":"tool","tool_name":"Read","tool_input":{"file_path":"c.rs"}}"#,
+            r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"c1","name":"Read","input":{"file_path":"a.rs"}}]}}"#,
+            r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"c2","name":"Read","input":{"file_path":"b.rs"}}]}}"#,
+            r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"c3","name":"Read","input":{"file_path":"c.rs"}}]}}"#,
         ];
         let f = make_temp_jsonl(&lines);
 
@@ -439,7 +429,7 @@ mod tests {
             "",
             r#"{"type":"assistant","message":{"role":"assistant","usage":{"input_tokens":300,"cache_read_input_tokens":700,"output_tokens":50},"content":"ok"}}"#,
             "more garbage {",
-            r#"{"git_branch":"main","cwd":"/home/user/myapp","session_id":"s2"}"#,
+            r#"{"gitBranch":"main","cwd":"/home/user/myapp","sessionId":"s2"}"#,
         ];
         let f = make_temp_jsonl(&lines);
 

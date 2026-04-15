@@ -85,8 +85,30 @@ pub fn set_active_session(state: State<AppState>, session_id: String) {
 ///
 /// This is a convenience command for "just show me whatever is happening right
 /// now" — it ignores any pinned session and always picks the latest transcript.
+/// It also correlates the session's CWD with IDE lock files to populate `ide_name`.
 #[tauri::command]
 pub fn auto_detect_session() -> Option<SessionState> {
     let (_, path) = find_most_recent_transcript()?;
-    parse_transcript(&path)
+    let mut state = parse_transcript(&path)?;
+
+    // Populate ide_name by matching the session's CWD against IDE lock workspace folders.
+    if state.ide_name.is_none() {
+        let ide_connections = discover_ide_connections();
+        for ide in &ide_connections {
+            if let Some(ref folders) = ide.workspace_folders {
+                // Match if the session's CWD starts with or equals any workspace folder
+                for folder in folders {
+                    if state.cwd == *folder || state.cwd.starts_with(&format!("{}/", folder)) || state.cwd.starts_with(&format!("{}\\", folder)) {
+                        state.ide_name = ide.ide_name.clone();
+                        break;
+                    }
+                }
+            }
+            if state.ide_name.is_some() {
+                break;
+            }
+        }
+    }
+
+    Some(state)
 }
