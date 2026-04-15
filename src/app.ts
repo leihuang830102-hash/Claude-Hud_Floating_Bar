@@ -10,22 +10,28 @@
  * - `listenForEvents()` subscribes to backend-emitted events for real-time updates.
  * - A 2-second polling fallback ensures the display stays current even if events
  *   are missed (e.g. file-watcher overflow, startup race).
+ * - `resizeToFit()` dynamically adjusts the Tauri window size to match the
+ *   visible card content, minimizing screen footprint.
  *
- * The card layout:
+ * The card layout (dynamic window sizing):
  * ┌─────────────────────────────────────────────┐
- * │ [model badge] project-name       [−] [×]    │  <- title bar (draggable)
+ * │ [model badge] project-name    [▼][⚙][×]    │  <- title bar (draggable)
  * ├─────────────────────────────────────────────┤
  * │ Context  79.1k / 200k (40%)                 │
  * │ ████████░░░░░░░░░░░░░░░░░░░░░░░             │  <- progress bar
  * ├─────────────────────────────────────────────┤
  * │ Output: 1.5k  |  Branch: main  |  IDE: ... │  <- details (collapsible)
  * │ Tools: Read (Running), Edit (Done)          │
+ * ├─────────────────────────────────────────────┤
+ * │ Display Settings                            │  <- settings (toggle)
+ * │ [x] Show Output  [x] Show Branch           │
  * └─────────────────────────────────────────────┘
  */
 
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
+import { LogicalSize } from '@tauri-apps/api/dpi';
 
 // ---------------------------------------------------------------------------
 // Types — mirror the Rust structs from src-tauri/src/types.rs
@@ -60,11 +66,27 @@ interface SessionState {
 }
 
 // ---------------------------------------------------------------------------
+// Constants
+// ---------------------------------------------------------------------------
+
+/** Fixed window width for the floating card. */
+const WINDOW_WIDTH = 480;
+
+/** Extra padding around the card for the transparent window border. */
+const WINDOW_PADDING = 8;
+
+/** Minimum window height — prevents window from collapsing to nothing. */
+const MIN_WINDOW_HEIGHT = 50;
+
+// ---------------------------------------------------------------------------
 // State
 // ---------------------------------------------------------------------------
 
 /** Whether the details section is currently expanded. */
 let detailsExpanded = true;
+
+/** Whether the settings panel is currently visible. */
+let settingsVisible = false;
 
 // ---------------------------------------------------------------------------
 // DOM references (populated during init)
@@ -106,11 +128,12 @@ export function initApp(): void {
       <div class="hud-titlebar" data-ref="titlebar">
         <span class="model-badge" data-ref="model-badge">—</span>
         <span class="project-name" data-ref="project-name">Waiting…</span>
-        <button class="titlebar-btn collapse-btn" data-ref="collapse-btn" title="Toggle details">−</button>
+        <button class="titlebar-btn collapse-btn" data-ref="collapse-btn" title="Toggle details">▼</button>
+        <button class="titlebar-btn settings-btn" data-ref="settings-btn" title="Settings">⚙</button>
         <button class="titlebar-btn close-btn" data-ref="close-btn" title="Hide window">×</button>
       </div>
 
-      <!-- Context usage section -->
+      <!-- Context usage section — always visible -->
       <div class="hud-context">
         <div class="context-label">
           <span class="label-text">Context</span>
@@ -121,23 +144,61 @@ export function initApp(): void {
         </div>
       </div>
 
-      <!-- Collapsible detail section -->
+      <!-- Collapsible detail section — hidden via .hidden class for dynamic sizing -->
       <div class="hud-details" data-ref="details">
-        <div class="detail-row">
+        <div class="detail-row" data-detail="output">
           <span class="detail-label">Output</span>
           <span class="detail-value" data-ref="output-tokens">—</span>
         </div>
-        <div class="detail-row">
+        <div class="detail-row" data-detail="branch">
           <span class="detail-label">Branch</span>
           <span class="detail-value" data-ref="git-branch">—</span>
         </div>
-        <div class="detail-row">
+        <div class="detail-row" data-detail="ide">
           <span class="detail-label">IDE</span>
           <span class="detail-value" data-ref="ide-name">—</span>
         </div>
         <div class="tools-section" data-ref="tools-section">
           <div class="tools-label">Tools</div>
           <div data-ref="tools-container"></div>
+        </div>
+      </div>
+
+      <!-- Settings panel (toggle with ⚙ button) -->
+      <div class="hud-settings hidden" data-ref="settings-panel">
+        <div class="settings-title">Display Settings</div>
+        <div class="settings-row">
+          <label class="settings-label">
+            <input type="checkbox" data-ref="show-output" checked> Show Output tokens
+          </label>
+        </div>
+        <div class="settings-row">
+          <label class="settings-label">
+            <input type="checkbox" data-ref="show-branch" checked> Show Git Branch
+          </label>
+        </div>
+        <div class="settings-row">
+          <label class="settings-label">
+            <input type="checkbox" data-ref="show-ide" checked> Show IDE Name
+          </label>
+        </div>
+        <div class="settings-row">
+          <label class="settings-label">
+            <input type="checkbox" data-ref="show-tools" checked> Show Active Tools
+          </label>
+        </div>
+        <div class="settings-row">
+          <label class="settings-label">
+            <input type="checkbox" data-ref="auto-collapse"> Auto-collapse when idle
+          </label>
+        </div>
+        <div class="settings-row">
+          <label class="settings-label">Context Window Size</label>
+          <select class="settings-select" data-ref="context-window-size">
+            <option value="200000" selected>200k (default)</option>
+            <option value="128000">128k</option>
+            <option value="100000">100k</option>
+          </select>
         </div>
       </div>
     </div>
@@ -167,6 +228,7 @@ export function initApp(): void {
   setupDrag();
   setupCollapseToggle();
   setupCloseButton();
+  setupSettingsPanel();
 
   // Start real-time event listeners + polling fallback.
   listenForEvents();
@@ -174,6 +236,47 @@ export function initApp(): void {
 
   // Perform an immediate fetch so we don't wait 2s for the first display.
   fetchState();
+}
+
+// ---------------------------------------------------------------------------
+// Dynamic window sizing
+// ---------------------------------------------------------------------------
+
+/**
+ * Resize the Tauri window to fit the currently visible card content.
+ *
+ * After each state change (render, collapse, settings toggle), this function
+ * measures the actual rendered height of the visible card element and adjusts
+ * the native window size to match. This minimizes the floating window's
+ * footprint — it's only as tall as the content it shows.
+ *
+ * Key behaviors:
+ * - Collapsed state → small window (titlebar + context bar only)
+ * - Expanded state → medium window (+ details + tools)
+ * - Settings open → taller window (+ settings panel)
+ * - Empty state → compact "waiting" window
+ */
+async function resizeToFit(): Promise<void> {
+  // Wait one animation frame for the browser to complete layout after
+  // any DOM changes (class toggles, innerHTML updates, etc.).
+  await new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
+
+  // Determine which card is currently visible.
+  const target = cardEl.classList.contains('hidden') ? emptyEl : cardEl;
+  if (!target) return;
+
+  // Measure the card's actual rendered height.
+  const height = target.getBoundingClientRect().height;
+  if (height <= 0) return;
+
+  // Compute the new window height: card height + padding, clamped to minimum.
+  const newHeight = Math.max(MIN_WINDOW_HEIGHT, Math.ceil(height + WINDOW_PADDING));
+
+  try {
+    await getCurrentWindow().setSize(new LogicalSize(WINDOW_WIDTH, newHeight));
+  } catch (err) {
+    console.warn('[claude-hud] resizeToFit error:', err);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -264,6 +367,9 @@ function render(state: SessionState): void {
     toolsContainerEl.innerHTML = '';
     (ref('tools-section') as HTMLElement).classList.add('hidden');
   }
+
+  // Resize window to fit the updated content.
+  resizeToFit();
 }
 
 /**
@@ -272,6 +378,7 @@ function render(state: SessionState): void {
 function renderEmpty(): void {
   cardEl.classList.add('hidden');
   emptyEl.classList.remove('hidden');
+  resizeToFit();
 }
 
 // ---------------------------------------------------------------------------
@@ -344,20 +451,22 @@ function setupDrag(): void {
 /**
  * Toggle the details section visibility.
  *
- * The collapse button in the title bar switches the `.collapsed` class on
- * the details container. CSS handles the smooth transition via max-height.
+ * ▼ = expanded (details visible below), ▲ = collapsed (details hidden).
+ * Uses `display: none` via the `.hidden` class so the window can accurately
+ * measure content height and resize accordingly.
  */
 function setupCollapseToggle(): void {
   const collapseBtn = ref('collapse-btn');
   collapseBtn.addEventListener('click', () => {
     detailsExpanded = !detailsExpanded;
     if (detailsExpanded) {
-      detailsEl.classList.remove('collapsed');
-      collapseBtn.textContent = '−';
+      detailsEl.classList.remove('hidden');
+      collapseBtn.textContent = '▼';
     } else {
-      detailsEl.classList.add('collapsed');
-      collapseBtn.textContent = '+';
+      detailsEl.classList.add('hidden');
+      collapseBtn.textContent = '▲';
     }
+    resizeToFit();
   });
 }
 
@@ -374,6 +483,95 @@ function setupCloseButton(): void {
       console.warn('[claude-hud] hide failed:', err);
     });
   });
+}
+
+/**
+ * Settings panel toggle and configuration persistence.
+ *
+ * The ⚙ button toggles a settings panel at the bottom of the card.
+ * Settings are saved to localStorage and applied on each render cycle.
+ */
+function setupSettingsPanel(): void {
+  const settingsBtn = ref('settings-btn');
+  const settingsPanel = ref('settings-panel');
+
+  // Toggle settings panel visibility
+  settingsBtn.addEventListener('click', () => {
+    settingsVisible = !settingsVisible;
+    if (settingsVisible) {
+      settingsPanel.classList.remove('hidden');
+    } else {
+      settingsPanel.classList.add('hidden');
+    }
+    resizeToFit();
+  });
+
+  // Load saved settings from localStorage
+  loadSettings();
+
+  // Wire up each checkbox to save on change and resize
+  const checkboxes = ['show-output', 'show-branch', 'show-ide', 'show-tools', 'auto-collapse'];
+  for (const cb of checkboxes) {
+    const el = ref(cb) as HTMLInputElement;
+    el.addEventListener('change', () => {
+      saveSettings();
+      applySettingsToRender();
+      resizeToFit();
+    });
+  }
+
+  // Context window size selector
+  const sizeSelect = ref('context-window-size') as HTMLSelectElement;
+  sizeSelect.addEventListener('change', () => {
+    saveSettings();
+  });
+}
+
+/** Persist settings to localStorage. */
+function saveSettings(): void {
+  const settings = {
+    showOutput: (ref('show-output') as HTMLInputElement).checked,
+    showBranch: (ref('show-branch') as HTMLInputElement).checked,
+    showIde: (ref('show-ide') as HTMLInputElement).checked,
+    showTools: (ref('show-tools') as HTMLInputElement).checked,
+    autoCollapse: (ref('auto-collapse') as HTMLInputElement).checked,
+    contextWindowSize: (ref('context-window-size') as HTMLSelectElement).value,
+  };
+  localStorage.setItem('claude-hud-settings', JSON.stringify(settings));
+}
+
+/** Load settings from localStorage, applying defaults if not found. */
+function loadSettings(): void {
+  const raw = localStorage.getItem('claude-hud-settings');
+  if (!raw) return;
+  try {
+    const s = JSON.parse(raw);
+    if (s.showOutput !== undefined) (ref('show-output') as HTMLInputElement).checked = s.showOutput;
+    if (s.showBranch !== undefined) (ref('show-branch') as HTMLInputElement).checked = s.showBranch;
+    if (s.showIde !== undefined) (ref('show-ide') as HTMLInputElement).checked = s.showIde;
+    if (s.showTools !== undefined) (ref('show-tools') as HTMLInputElement).checked = s.showTools;
+    if (s.autoCollapse !== undefined) (ref('auto-collapse') as HTMLInputElement).checked = s.autoCollapse;
+    if (s.contextWindowSize) (ref('context-window-size') as HTMLSelectElement).value = s.contextWindowSize;
+  } catch { /* ignore corrupt storage */ }
+}
+
+/** Apply current settings to the detail rows visibility. */
+function applySettingsToRender(): void {
+  const showOutput = (ref('show-output') as HTMLInputElement).checked;
+  const showBranch = (ref('show-branch') as HTMLInputElement).checked;
+  const showIde = (ref('show-ide') as HTMLInputElement).checked;
+  const showTools = (ref('show-tools') as HTMLInputElement).checked;
+
+  // Toggle detail row visibility via data-detail attribute.
+  const rows = detailsEl.querySelectorAll('.detail-row');
+  rows.forEach((row) => {
+    const detail = row.getAttribute('data-detail');
+    if (detail === 'output') row.classList.toggle('hidden', !showOutput);
+    if (detail === 'branch') row.classList.toggle('hidden', !showBranch);
+    if (detail === 'ide') row.classList.toggle('hidden', !showIde);
+  });
+  const toolsSection = ref('tools-section');
+  toolsSection.classList.toggle('hidden', !showTools);
 }
 
 // ---------------------------------------------------------------------------

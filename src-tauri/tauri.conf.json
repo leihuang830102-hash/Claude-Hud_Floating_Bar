@@ -13,8 +13,8 @@
     "windows": [
       {
         "title": "Claude HUD",
-        "width": 400,
-        "height": 200,
+        "width": 480,
+        "height": 80,
         "resizable": false,
         "decorations": false,
         "transparent": true,
