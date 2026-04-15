@@ -3,6 +3,11 @@
 A cross-platform **floating desktop window** that displays Claude Code context status in real-time. Works with Claude Code in **any mode** — CLI terminal, VS Code extension, Trae CN, or any other IDE.
 
 > **悬浮、可配、不绑定 IDE** — 无需修改 Claude Code，直接读取文件系统数据。
+>
+> <img width="391" height="100" alt="image" src="https://github.com/user-attachments/assets/2d4e7bf9-2cb2-464d-b2fb-26c3aa809e72" />
+
+
+
 
 <img width="395" height="556" alt="image" src="https://github.com/user-attachments/assets/7a0c87cd-93c0-49b0-906b-0ba49c99dac4" />
 
