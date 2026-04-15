@@ -57,8 +57,7 @@ npm run tauri build
 ├──────────────────────────────────┤
 │ Project   Claude_Status_Hub      │  ← Configurable
 │ Output    201                    │
-│ Branch    feat/two-level-review  │
-│ IDE       Trae CN                │
+│ Branch    feat/two-level-review  │              │
 │ Session   515c6c46…              │  ← Off by default
 │ TOOLS: Grep, Read, Edit, Write   │
 └──────────────────────────────────┘
