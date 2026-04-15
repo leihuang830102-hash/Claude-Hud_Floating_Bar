@@ -1,15 +1,82 @@
 # Claude HUD Floating Bar
 
-A cross-platform floating desktop window that displays Claude Code context status in real-time. Works with Claude Code in any mode — CLI terminal, VS Code extension, Trae CN, or any other IDE.
+A cross-platform **floating desktop window** that displays Claude Code context status in real-time. Works with Claude Code in **any mode** — CLI terminal, VS Code extension, Trae CN, or any other IDE.
+
+> **悬浮、可配、不绑定 IDE** — 无需修改 Claude Code，直接读取文件系统数据。
+
+![Claude HUD Floating Bar](docs/screenshots/hud-expanded.png)
 
 ## Features
 
+- **Floating** — always-on-top, draggable, collapsible, auto-resizing
+- **Configurable** — toggle display of Project, Output, Branch, IDE, Session ID, Tools
+- **IDE-independent** — reads data directly from `~/.claude/`, no plugin patches needed
 - **Real-time context monitoring** — shows token usage and context window percentage
-- **Floating card UI** — draggable, always-on-top, collapsible floating window
-- **System tray** — minimizes to tray, stays out of the way
 - **Multi-session support** — auto-detects active Claude Code sessions
+- **System tray** — minimizes to tray, stays out of the way
 - **Cross-platform** — Windows, macOS, Linux (Tauri 2.x)
-- **Zero modification** — reads data directly from Claude Code's filesystem, no plugin patches or hooks needed
+- **Zero modification** — no hooks, no patches, no plugin changes required
+
+## Quick Start
+
+### Prerequisites
+
+- [Rust](https://rustup.rs/) (1.82+)
+- [Node.js](https://nodejs.org/) (18+)
+- WebView2 (pre-installed on Windows 10+)
+
+### Install & Run
+
+```bash
+git clone https://github.com/leihuang830102-hash/Claude-Hud_Floating_Bar.git
+cd Claude-Hud_Floating_Bar/claude-hud-float
+npm install
+npm run tauri dev
+```
+
+### Build for Production
+
+```bash
+npm run tauri build
+```
+
+## Card Layout
+
+```
+┌──────────────────────────────────┐
+│ [glm-5.1]               [▼][⚙][×]│  ← Title bar (draggable)
+├──────────────────────────────────┤
+│ Context  140.5k / 200k (70%)     │  ← Always visible
+│ ████████████████░░░░░░░░░░░░░░░  │
+├──────────────────────────────────┤
+│ Project   Claude_Status_Hub      │  ← Configurable
+│ Output    201                    │
+│ Branch    feat/two-level-review  │
+│ IDE       Trae CN                │
+│ Session   515c6c46…              │  ← Off by default
+│ TOOLS: Grep, Read, Edit, Write   │
+└──────────────────────────────────┘
+```
+
+### UI Controls
+
+| Button | Action |
+|--------|--------|
+| **▼ / ▲** | Collapse / expand details |
+| **⚙** | Open / close settings panel |
+| **×** | Hide to system tray |
+
+### Settings
+
+Click **⚙** to toggle individual fields on/off. Settings persist across restarts.
+
+### Progress Bar Colors
+
+| Context % | Color | Meaning |
+|-----------|-------|---------|
+| 0–80% | Green | Normal |
+| 80–95% | Orange | Warning |
+| >95% | Red | Danger |
 
 ## How It Works
 
@@ -21,9 +88,7 @@ The app monitors Claude Code's data files in `~/.claude/`:
 | Sessions | `~/.claude/sessions/*.json` | Active session tracking |
 | IDE Locks | `~/.claude/ide/*.lock` | IDE-to-session mapping |
 
-**Context percentage** is derived from the last assistant message's `input_tokens + cache_read_input_tokens` in the transcript JSONL — verified to accurately reflect current context window usage.
-
-## Architecture
+**Context percentage** = `(input_tokens + cache_read_input_tokens) / 200,000 × 100` from the last assistant message.
 
 ```
 Claude Code (any mode)
@@ -35,32 +100,6 @@ claude-hud-float (Tauri App)
   ├── Rust backend — file watcher, JSONL parser, session manager
   ├── WebView frontend — floating card with progress bars
   └── System tray — minimize/restore
-```
-
-## Tech Stack
-
-- **Tauri 2.x** — desktop framework (Rust + WebView)
-- **Rust** — backend (notify, serde, file parsing)
-- **TypeScript + CSS** — frontend (vanilla, no framework)
-- **Vite** — build tool
-
-## Prerequisites
-
-- [Rust](https://rustup.rs/) (1.82+)
-- [Node.js](https://nodejs.org/) (18+)
-- [WebView2](https://developer.microsoft.com/en-us/microsoft-edge/webview2/) (Windows, usually pre-installed)
-
-## Build & Run
-
-```bash
-# Install dependencies
-npm install
-
-# Development mode
-npm run tauri dev
-
-# Production build
-npm run tauri build
 ```
 
 ## Project Structure
@@ -81,25 +120,28 @@ claude-hud-float/
 │   │   ├── commands.rs           # Tauri IPC commands
 │   │   └── persistence.rs        # Config persistence
 │   └── tests/
-│       └── integration_test.rs   # Tests against real data
+│       └── integration_test.rs
+├── docs/
+│   ├── MANUAL.md                 # User manual
+│   └── screenshots/              # UI screenshots
 ├── index.html
 ├── package.json
 └── vite.config.ts
 ```
 
-## Configuration
+## Documentation
 
-Config stored at `~/.claude/hud-float-config.json`:
+- **[User Manual](docs/MANUAL.md)** — detailed usage guide
+- **[Design Document](docs/plans/2026-04-14-claude-hud-floating-window-design.md)** — architecture and data source analysis
 
-```json
-{
-  "x": -1,
-  "y": -1,
-  "collapsed": false,
-  "theme": "dark",
-  "autoFollow": true
-}
-```
+## Tech Stack
+
+| Component | Technology | Reason |
+|-----------|-----------|--------|
+| Desktop framework | Tauri 2.x | Cross-platform, ~10MB bundle |
+| Backend | Rust | File watching (notify), JSON parsing (serde) |
+| Frontend | TypeScript + CSS | WebView rendering, vanilla |
+| Build | Vite | Fast HMR during development |
 
 ## License
 
