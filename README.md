@@ -16,7 +16,6 @@ A cross-platform **floating desktop window** that displays Claude Code context s
 
 - **Floating** — always-on-top, draggable, collapsible, auto-resizing
 - **Configurable** — toggle display of Project, Output, Branch, IDE, Session ID, Tools
-- **IDE-independent** — reads data directly from `~/.claude/`, no plugin patches needed
 - **Real-time context monitoring** — shows token usage and context window percentage
 - **Multi-session support** — auto-detects active Claude Code sessions
 - **System tray** — minimizes to tray, stays out of the way
